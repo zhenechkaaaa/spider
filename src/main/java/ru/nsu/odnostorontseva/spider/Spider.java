@@ -6,19 +6,29 @@ import java.lang.Thread;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @AllArgsConstructor
 public class Spider {
     private final String url;
     private final List<String> messages = Collections.synchronizedList(new ArrayList<>());
 
+    private final AtomicInteger counter = new AtomicInteger(0);
+    private final Object lock = new Object();
+
     public void start(String path) throws InterruptedException {
-        Thread root = recursive(path);
-        root.join();
+        counter.incrementAndGet();
+        spawn(path);
+
+        synchronized (lock) {
+            while (counter.get() > 0) {
+                lock.wait();
+            }
+        }
     }
 
-    private Thread recursive(String path) {
-        return Thread.ofVirtual()
+    private void spawn(String path) {
+        Thread.ofVirtual()
                 .name("Walker" + path)
                 .start(() -> {
                     try {
@@ -27,19 +37,21 @@ public class Spider {
 
                         if (message != null) {
                             messages.add(message.getMessage());
-                            List<Thread> child = new ArrayList<>();
-                            for (String childPath : message.getSuccessors()) {
-                                Thread childThread = recursive(childPath);
-                                child.add(childThread);
-                            }
 
-                            for (Thread childThread : child) {
-                                childThread.join();
+                            for (String child: message.getSuccessors()) {
+                                counter.incrementAndGet();
+                                spawn(child);
                             }
                         }
-
-                    } catch (InterruptedException e) {
-                        throw new RuntimeException(e);
+                    } catch (Exception e) {
+                        System.err.println(e.getMessage());;
+                    } finally {
+                        int tmp = counter.decrementAndGet();
+                        if (tmp == 0) {
+                            synchronized (lock) {
+                                lock.notifyAll();
+                            }
+                        }
                     }
                 });
     }
